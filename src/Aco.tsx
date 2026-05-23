@@ -18,6 +18,10 @@ import {
   StepForward,
   Sparkles,
   Calculator,
+  Plus,
+  BarChart3,
+  BookOpen,
+  ChevronDown,
 } from "lucide-react";
 
 const TOOLS = {
@@ -54,6 +58,12 @@ export default function SchoolEvacuationACO() {
   const [showPheromone, setShowPheromone] = useState(true);
   const [showAnts, setShowAnts] = useState(true);
   const [speed, setSpeed] = useState(1);
+  const [fireMode, setFireMode] = useState('static'); // 'static' | 'dynamic'
+
+  // Метрики: какие отслеживаются + меню выбора
+  const [selectedMetrics, setSelectedMetrics] = useState(['iterations', 'length', 'cost']);
+  const [metricsMenuOpen, setMetricsMenuOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(null); // index открытого пункта или null
 
   // Редактор
   const [editMode, setEditMode] = useState(false);
@@ -567,6 +577,33 @@ export default function SchoolEvacuationACO() {
       state.iterBestHistory.shift();
     }
 
+    // === Динамический пожар: каждые 5 итераций сдвигаем очаги ===
+    if (fireMode === 'dynamic' && state.iter % 5 === 0 && state.fires.length > 0) {
+      const dirs = [[-1,0],[1,0],[0,-1],[0,1],[0,0]];
+      const newFires = state.fires.map((f) => {
+        for (let tries = 0; tries < 8; tries++) {
+          const [dr, dc] = dirs[Math.floor(Math.random() * dirs.length)];
+          const nr = f.row + dr;
+          const nc = f.col + dc;
+          if (nr > 1 && nr < ROWS - 2 && nc > 1 && nc < COLS - 2 &&
+              state.grid[nr][nc] !== 1 && state.grid[nr][nc] !== 3 &&
+              state.grid[nr][nc] !== 4) {
+            return { ...f, row: nr, col: nc };
+          }
+        }
+        return f;
+      });
+      state.fires = newFires;
+      applyFires(state.grid, state.fires);
+      state.starts.forEach((s) => {
+        if (state.grid[s.row][s.col] === 0) state.grid[s.row][s.col] = 4;
+      });
+      state.exits.forEach((e) => { state.grid[e.row][e.col] = 3; });
+      // Сбросим лучший путь — он может теперь проходить через огонь
+      state.bestPath = null;
+      state.bestCost = Infinity;
+    }
+
     setIteration(state.iter);
     setBestCost(state.bestCost === Infinity ? null : state.bestCost);
   };
@@ -811,6 +848,7 @@ export default function SchoolEvacuationACO() {
     numAnts,
     eliteWeight,
     convergedAt,
+    fireMode,
   ]);
 
   // === РЕДАКТОР ===
@@ -967,10 +1005,21 @@ export default function SchoolEvacuationACO() {
       setIsDrawing(true);
       handleCanvasInteraction(e, true);
     } else {
-      // Клик по клетке — закрепляем для разбора формулы
+      // Клик по клетке
       const cell = handleCanvasInteraction(e);
       if (cell) {
-        const { grid } = stateRef.current;
+        const state = stateRef.current;
+        const { grid } = state;
+        // Если клик по классу — переключаем активный старт
+        const clickedStart = state.starts.find(
+          (s) => s.row === cell.row && s.col === cell.col,
+        );
+        if (clickedStart) {
+          state.activeStart = clickedStart;
+          resetSimulation();
+          return;
+        }
+        // Иначе закрепляем клетку для разбора формулы
         if (grid[cell.row][cell.col] !== 1 && grid[cell.row][cell.col] !== 2) {
           setPinnedCell(cell);
         }
@@ -1218,7 +1267,7 @@ export default function SchoolEvacuationACO() {
         ctx.fillText(activeStart.name, x, y);
       }
 
-      // Остальные классы
+      // Остальные классы (кликабельные)
       starts.forEach((s) => {
         if (s === activeStart && mode === MODES.NORMAL) return;
         if (mode === MODES.STEP_ANT && s === activeStart) return;
@@ -1228,8 +1277,13 @@ export default function SchoolEvacuationACO() {
         ctx.beginPath();
         ctx.arc(x, y, 8, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = "rgba(255,255,255,0.55)";
-        ctx.font = "9px ui-monospace, monospace";
+        ctx.strokeStyle = "rgba(255, 137, 6, 0.4)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(x, y, 9, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
+        ctx.font = "bold 9px ui-monospace, monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(s.name, x, y);
@@ -1521,12 +1575,7 @@ export default function SchoolEvacuationACO() {
       <div className="max-w-7xl mx-auto">
         <div className="mb-6 flex items-end justify-between flex-wrap gap-4">
           <div>
-            <div
-              className="mono text-xs tracking-widest uppercase mb-2 flex items-center gap-2"
-              style={{ color: "#ff8906" }}
-            >
-              <Flame size={12} /> ACO {"·"} Эвакуация
-            </div>
+            
             <h1 className="display text-4xl md:text-5xl font-light leading-tight">
               Эвакуация из школы
               <br />
@@ -1582,11 +1631,7 @@ export default function SchoolEvacuationACO() {
             <StepForward size={14} /> Один муравей (пошагово)
           </button>
 
-          <div className="ml-auto mono text-xs" style={{ color: "#a7a9be" }}>
-            {mode === MODES.NORMAL
-              ? "Запускает 20 муравьёв одновременно, обновляет феромон каждую итерацию"
-              : "Показывает работу одного муравья — вероятности на каждом шаге"}
-          </div>
+          
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -1684,7 +1729,7 @@ export default function SchoolEvacuationACO() {
               {!editMode && (
                 <div className="mono text-xs ml-2" style={{ color: "#a7a9be" }}>
                   {mode === MODES.NORMAL
-                    ? "Кликните по любой клетке, чтобы зафиксировать её для разбора формулы"
+                    ? "Клик по номеру класса — выбрать стартовую точку. Клик по другой клетке — разбор формулы"
                     : "Включите редактор, чтобы расставить элементы вручную"}
                 </div>
               )}
@@ -1890,6 +1935,34 @@ export default function SchoolEvacuationACO() {
               </button>
 
               <div className="ml-auto flex gap-2">
+                <div
+                  className="flex items-center rounded-md overflow-hidden"
+                  style={{ border: "1px solid rgba(255,80,32,0.3)" }}
+                >
+                  <button
+                    onClick={() => setFireMode('static')}
+                    className="mono text-xs px-3 py-2.5 flex items-center gap-1"
+                    style={{
+                      background: fireMode === 'static' ? "rgba(255,80,32,0.2)" : "transparent",
+                      color: fireMode === 'static' ? "#ff5020" : "#a7a9be",
+                      fontWeight: fireMode === 'static' ? 600 : 400,
+                    }}
+                  >
+                    <Flame size={12} /> статичный
+                  </button>
+                  <button
+                    onClick={() => setFireMode('dynamic')}
+                    className="mono text-xs px-3 py-2.5 flex items-center gap-1"
+                    style={{
+                      background: fireMode === 'dynamic' ? "rgba(255,80,32,0.2)" : "transparent",
+                      color: fireMode === 'dynamic' ? "#ff5020" : "#a7a9be",
+                      fontWeight: fireMode === 'dynamic' ? 600 : 400,
+                      borderLeft: "1px solid rgba(255,80,32,0.2)",
+                    }}
+                  >
+                    <Flame size={12} /> динамический
+                  </button>
+                </div>
                 <button
                   onClick={() => setShowPheromone(!showPheromone)}
                   className="mono text-xs px-3 py-2.5 rounded-md"
@@ -2143,316 +2216,313 @@ export default function SchoolEvacuationACO() {
               </div>
             )}
 
-            {/* === РАЗБОР ФОРМУЛЫ === */}
-            {mode === MODES.NORMAL &&
-              breakdown &&
-              breakdown.cellType !== 1 &&
-              breakdown.cellType !== 2 && (
+            <div
+              className="p-4 rounded-lg"
+              style={{
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              <div
+                className="mono text-xs uppercase tracking-widest mb-4"
+                style={{ color: "#a7a9be" }}
+              >
+                Параметры
+              </div>
+              <div className="space-y-3">
+                <ParamSlider
+                  label="α — феромон"
+                  value={alpha}
+                  setValue={setAlpha}
+                  min={0}
+                  max={3}
+                  step={0.1}
+                  upHint="Сильнее влияние опыта колонии"
+                  downHint="Слабее влияние опыта колонии"
+                />
+                <ParamSlider
+                  label="β — эвристика"
+                  value={beta}
+                  setValue={setBeta}
+                  min={0}
+                  max={6}
+                  step={0.1}
+                  upHint="Сильнее тяга к выходу"
+                  downHint="Слабее тяга к выходу"
+                />
+                <ParamSlider
+                  label="ρ — испарение"
+                  value={rho}
+                  setValue={setRho}
+                  min={0.01}
+                  max={0.5}
+                  step={0.01}
+                  upHint="Быстрее забывание старых путей"
+                  downHint="Медленнее забывание старых путей"
+                />
+                <ParamSlider
+                  label="Q — отложение"
+                  value={Q}
+                  setValue={setQ}
+                  min={10}
+                  max={300}
+                  step={10}
+                  upHint="Сильнее закрепление хороших путей"
+                  downHint="Слабее закрепление хороших путей"
+                />
+                <ParamSlider
+                  label="e — элита"
+                  value={eliteWeight}
+                  setValue={setEliteWeight}
+                  min={0}
+                  max={5}
+                  step={1}
+                  upHint="Сильнее влияние лучшего маршрута"
+                  downHint="Слабее влияние лучшего маршрута"
+                />
+                <ParamSlider
+                  label="муравьёв"
+                  value={numAnts}
+                  setValue={setNumAnts}
+                  min={5}
+                  max={50}
+                  step={1}
+                  upHint="Выше точность поиска"
+                  downHint="Ниже точность поиска"
+                />
+                <ParamSlider
+                  label="скорость"
+                  value={speed}
+                  setValue={setSpeed}
+                  min={0.5}
+                  max={5}
+                  step={0.5}
+                  upHint="Быстрее анимация"
+                  downHint="Медленнее анимация"
+                />
+              </div>
+            </div>
+
+
+
+
+
+            {/* === МЕТОДИЧКА === */}
+            <div
+              className="rounded-lg p-5"
+              style={{
+                background: "rgba(127,219,255,0.04)",
+                border: "1px solid rgba(127,219,255,0.15)",
+              }}
+            >
+              <div className="flex items-center gap-2 mb-4">
+                <BookOpen size={16} style={{ color: "#7fdbff" }} />
                 <div
-                  className="rounded-lg p-5"
-                  style={{
-                    background:
-                      "linear-gradient(135deg, rgba(255,137,6,0.06), rgba(127,219,255,0.04))",
-                    border: "1px solid rgba(255,137,6,0.2)",
-                  }}
+                  className="mono text-xs uppercase tracking-widest"
+                  style={{ color: "#7fdbff" }}
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <Calculator size={16} style={{ color: "#ff8906" }} />
-                      <div
-                        className="mono text-sm uppercase tracking-widest"
-                        style={{ color: "#ff8906" }}
-                      >
-                        Разбор формулы для клетки ({breakdown.cell.row},{" "}
-                        {breakdown.cell.col})
-                      </div>
-                    </div>
-                    {pinnedCell && (
+                  Краткое руководство
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {[
+                  {
+                    title: "1. Дано",
+                    body: (
+                      <>
+                        <p className="mb-2">
+                          Перед вами карта школы — сетка 36 на 24 клетки.
+                          На ней расположены коридоры, классы (отмечены
+                          номерами), эвакуационные выходы и очаги пожара.
+                        </p>
+                        <p>
+                          Цель алгоритма — найти из выбранного класса
+                          (отмечен оранжевой звездой) кратчайший и безопасный
+                          путь к ближайшему выходу, обходя огонь.
+                        </p>
+                      </>
+                    ),
+                  },
+                  {
+                    title: "2. Первоначальная настройка",
+                    body: (
+                      <>
+                        <p className="mb-2">
+                          Выберите стартовый класс — кликните на любой номер
+                          на карте, и он станет активным.
+                        </p>
+                        <p className="mb-2">
+                          Выберите тип пожара справа от кнопок: статичный
+                          (очаги стоят на месте) или динамический (очаги
+                          случайно смещаются каждые 5 итераций).
+                        </p>
+                        <p className="mb-2">
+                          Под картой задайте параметры алгоритма с помощью
+                          ползунков. Под каждым из них написано, как
+                          изменение влияет на поведение муравьёв.
+                        </p>
+                        <p>
+                          В блоке «Метрики» справа нажмите «+ добавить» и
+                          выберите показатели, которые хотите отслеживать.
+                        </p>
+                      </>
+                    ),
+                  },
+                  {
+                    title: "3. Запуск",
+                    body: (
+                      <>
+                        <p className="mb-2">
+                          Нажмите кнопку «Запуск» — колония муравьёв начнёт
+                          непрерывно работать. На каждой итерации все
+                          муравьи одновременно ищут путь к выходу.
+                        </p>
+                        <p className="mb-2">
+                          Кнопка «Итерация» выполняет один шаг алгоритма
+                          вручную — удобно, если хочется наблюдать
+                          постепенное обучение колонии.
+                        </p>
+                        <p>
+                          На карте вы увидите: жёлтое свечение — следы
+                          феромона, синяя линия — лучший найденный маршрут,
+                          движущиеся точки — сами муравьи.
+                        </p>
+                      </>
+                    ),
+                  },
+                  {
+                    title: "4. Анализ результатов",
+                    body: (
+                      <>
+                        <p className="mb-2">
+                          Следите за блоком «Метрики». Главный показатель —
+                          стоимость F. Она должна постепенно уменьшаться
+                          с каждой итерацией.
+                        </p>
+                        <p className="mb-2">
+                          Показатель «Улучшение» в процентах говорит,
+                          насколько колония превзошла свой первый
+                          результат.
+                        </p>
+                        <p className="mb-2">
+                          «Успешных муравьёв» показывает, какая доля
+                          колонии доходит до выхода. Если их меньше
+                          половины — возможно, карта слишком сложная или
+                          параметры подобраны неудачно.
+                        </p>
+                        <p>
+                          Когда метрика «Сошлось» покажет номер итерации,
+                          это значит, что алгоритм нашёл оптимум и больше
+                          не находит улучшений.
+                        </p>
+                      </>
+                    ),
+                  },
+                  {
+                    title: "5. Другая настройка",
+                    body: (
+                      <>
+                        <p className="mb-2">
+                          Попробуйте изменить параметры и сравнить
+                          результаты. Например, увеличьте β до 5 — муравьи
+                          станут жаднее и быстрее найдут путь, но он
+                          не всегда будет оптимальным.
+                        </p>
+                        <p className="mb-2">
+                          Поставьте e в ноль, чтобы отключить элитную
+                          стратегию. Сходимость замедлится, но алгоритм
+                          станет ближе к классическому Ant System.
+                        </p>
+                        <p className="mb-2">
+                          Увеличьте ρ до 0.4 — феромон будет быстро
+                          забываться, и колония станет менее стабильной
+                          в выборе маршрута.
+                        </p>
+                        <p>
+                          После каждого изменения параметров нажимайте
+                          «Сброс», чтобы алгоритм начал поиск с чистого
+                          феромона.
+                        </p>
+                      </>
+                    ),
+                  },
+                  {
+                    title: "6. Дополнительно",
+                    body: (
+                      <>
+                        <p className="mb-2">
+                          Откройте редактор карты кнопкой сверху. В нём
+                          можно ставить и убирать стены, очаги пожара,
+                          выходы и перемещать стартовые точки классов.
+                        </p>
+                        <p className="mb-2">
+                          Наведите курсор на любую свободную клетку — справа
+                          в блоке «Разбор формулы» появится таблица с
+                          расчётом вероятностей перехода в каждого соседа.
+                          Чтобы зафиксировать клетку, кликните по ней.
+                        </p>
+                        <p>
+                          Переключитесь в пошаговый режим, чтобы наблюдать
+                          работу одного муравья. Вы увидите каждый его шаг
+                          и значения вероятностей на каждом ходу.
+                        </p>
+                      </>
+                    ),
+                  },
+                ].map((item, idx) => {
+                  const isOpen = guideOpen === idx;
+                  return (
+                    <div
+                      key={idx}
+                      className="rounded-md overflow-hidden"
+                      style={{
+                        background: isOpen
+                          ? "rgba(127,219,255,0.06)"
+                          : "rgba(0,0,0,0.2)",
+                        border: "1px solid rgba(127,219,255,0.1)",
+                      }}
+                    >
                       <button
-                        onClick={() => setPinnedCell(null)}
-                        className="mono text-xs px-2 py-1 rounded"
+                        onClick={() => setGuideOpen(isOpen ? null : idx)}
+                        className="w-full flex items-center justify-between px-4 py-3 text-left"
                         style={{
-                          background: "rgba(255,255,255,0.05)",
-                          color: "#a7a9be",
+                          background: "transparent",
+                          color: isOpen ? "#7fdbff" : "#fffffe",
                         }}
                       >
-                        {"× открепить"}
+                        <span
+                          className="mono text-sm"
+                          style={{ fontWeight: isOpen ? 600 : 500 }}
+                        >
+                          {item.title}
+                        </span>
+                        <ChevronDown
+                          size={16}
+                          style={{
+                            transition: "transform 0.2s",
+                            transform: isOpen ? "rotate(180deg)" : "rotate(0)",
+                            color: "#a7a9be",
+                          }}
+                        />
                       </button>
-                    )}
-                  </div>
-                  <div
-                    className="text- mb-3"
-                    style={{ color: "rgba(167,169,190,0.85)", lineHeight: 1.7 }}
-                  >
-                    Кликните на любую клетку карты — увидите формулу P(i{"→"}j)
-                    если бы муравей стоял там. Каждая строка — один доступный
-                    сосед. <b style={{ color: "#ffc832" }}>{"τ"}</b> — феромон
-                    на ребре (растёт когда муравьи часто ходили туда).{" "}
-                    <b style={{ color: "#96dc64" }}>{"η"}</b> — эвристика:
-                    близость к выходу и удалённость от огня.{" "}
-                    <b style={{ color: "#ff8906" }}>P</b> — итоговая
-                    вероятность. Строка с наибольшим P выделена.
-                  </div>
-                  <div
-                    className="mono text-xs mb-3"
-                    style={{ color: "#a7a9be" }}
-                  >
-                    Если бы муравей стоял в этой клетке, он выбирал бы следующий
-                    шаг так:
-                  </div>
-
-                  {/* Формула */}
-                  <div
-                    className="rounded-md p-3 mb-3 mono text-sm text-center"
-                    style={{
-                      background: "rgba(0,0,0,0.3)",
-                      border: "1px solid rgba(255,255,255,0.05)",
-                      color: "#fffffe",
-                    }}
-                  >
-                    P(j) = {"τ"}(j){"ᵜᵃ"} {"·"} {"η"}(j){"ᵜᵇ"} / {"Σ"}
-                    {" | "}
-                    <span style={{ color: "#ffc832" }}>
-                      {"α"}={alpha.toFixed(1)}
-                    </span>
-                    {" · "}
-                    <span style={{ color: "#96dc64" }}>
-                      {"β"}={beta.toFixed(1)}
-                    </span>
-                  </div>
-
-                  {/* Таблица соседей */}
-                  {breakdown.candidates.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table
-                        className="w-full mono text-xs"
-                        style={{ borderCollapse: "collapse" }}
-                      >
-                        <thead>
-                          <tr
-                            style={{
-                              color: "#a7a9be",
-                              borderBottom: "1px solid rgba(255,255,255,0.1)",
-                            }}
-                          >
-                            <th className="text-left py-2 px-2">направление</th>
-                            <th className="text-right py-2 px-2">τ</th>
-                            <th className="text-right py-2 px-2">η</th>
-                            <th className="text-right py-2 px-2">
-                              τ<sup>α</sup>·η<sup>β</sup>
-                            </th>
-                            <th
-                              className="text-right py-2 px-2"
-                              style={{ color: "#ff8906" }}
-                            >
-                              P
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {breakdown.candidates
-                            .sort((a, b) => b.prob - a.prob)
-                            .map((c, i) => (
-                              <tr
-                                key={i}
-                                style={{
-                                  color: "#fffffe",
-                                  borderBottom:
-                                    "1px solid rgba(255,255,255,0.05)",
-                                  background:
-                                    i === 0
-                                      ? "rgba(255,137,6,0.05)"
-                                      : "transparent",
-                                }}
-                              >
-                                <td className="py-2 px-2">{c.direction}</td>
-                                <td
-                                  className="text-right py-2 px-2"
-                                  style={{ color: "#ffc832" }}
-                                >
-                                  {c.tau.toFixed(3)}
-                                </td>
-                                <td
-                                  className="text-right py-2 px-2"
-                                  style={{ color: "#96dc64" }}
-                                >
-                                  {c.eta.toFixed(3)}
-                                </td>
-                                <td
-                                  className="text-right py-2 px-2"
-                                  style={{ color: "#a7a9be" }}
-                                >
-                                  {c.f.toFixed(5)}
-                                </td>
-                                <td
-                                  className="text-right py-2 px-2"
-                                  style={{
-                                    color: "#ff8906",
-                                    fontWeight: 600,
-                                    fontSize: i === 0 ? "14px" : "12px",
-                                  }}
-                                >
-                                  {(c.prob * 100).toFixed(1)}%
-                                </td>
-                              </tr>
-                            ))}
-                          <tr style={{ color: "#a7a9be", fontSize: "11px" }}>
-                            <td
-                              className="py-2 px-2"
-                              colSpan="3"
-                              style={{ textAlign: "right" }}
-                            >
-                              сумма Σ:
-                            </td>
-                            <td className="text-right py-2 px-2">
-                              {breakdown.candidates
-                                .reduce((s, c) => s + c.f, 0)
-                                .toFixed(5)}
-                            </td>
-                            <td className="text-right py-2 px-2">100%</td>
-                          </tr>
-                        </tbody>
-                      </table>
+                      {isOpen && (
+                        <div
+                          className="px-4 pb-4 text-sm"
+                          style={{
+                            color: "rgba(255,255,255,0.85)",
+                            lineHeight: 1.6,
+                          }}
+                        >
+                          {item.body}
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <div className="mono text-xs" style={{ color: "#dc6464" }}>
-                      Клетка изолирована — все соседи заблокированы
-                      (стена/огонь).
-                    </div>
-                  )}
-
-                  <div
-                    className="mono text-xs mt-3"
-                    style={{ color: "rgba(167,169,190,0.7)" }}
-                  >
-                    τ — феромон (опыт колонии) · η — эвристика (близость к
-                    выходу, удалённость от огня)
-                  </div>
-                </div>
-              )}
-
-            {/* === ВЫВОД РАСЧЁТОВ === */}
-            {mode === MODES.NORMAL && (
-              <div
-                className="rounded-lg p-5"
-                style={{
-                  background:
-                    "linear-gradient(135deg, rgba(255,137,6,0.08), rgba(127,219,255,0.04))",
-                  border: "1px solid rgba(255,137,6,0.2)",
-                }}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <TrendingDown size={16} style={{ color: "#ff8906" }} />
-                  <div
-                    className="mono text-xl uppercase tracking-widest"
-                    style={{ color: "#ff8906" }}
-                  >
-                    Вывод расчётов
-                  </div>
-                </div>
-                <div
-                  className="text-xl mb-4"
-                  style={{ color: "rgba(167,169,190,0.85)", lineHeight: 1.7 }}
-                >
-                  <b style={{ color: "#7fdbff" }}>Длина</b> — клеток от старта
-                  до выхода, меньше — лучше, но не единственный критерий.{" "}
-                  <b style={{ color: "#ff8906" }}>Стоимость F</b> — длина плюс
-                  штраф за близость к огню, именно F минимизирует алгоритм.{" "}
-                  <b style={{ color: "#ff5020" }}>До огня</b> — чем больше, тем
-                  безопаснее маршрут. На{" "}
-                  <b style={{ color: "#fffffe" }}>графике</b>: оранжевая линия
-                  монотонно убывает (глобальный лучший), зелёная скачет
-                  (итерационный). Когда они сближаются — алгоритм сошёлся.
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                  <Metric
-                    label="Итераций"
-                    value={iteration}
-                    hint={
-                      convergedAt !== null
-                        ? `сошлось на ${convergedAt}`
-                        : "выполнено"
-                    }
-                  />
-                  <Metric
-                    label="Длина маршрута"
-                    value={bestLength !== null ? `${bestLength}` : "—"}
-                    hint="клеток"
-                    color="#7fdbff"
-                  />
-                  <Metric
-                    label="Стоимость F"
-                    value={bestCost ? bestCost.toFixed(1) : "—"}
-                    hint="длина + штраф"
-                    color="#ff8906"
-                  />
-                  <Metric
-                    label="До огня"
-                    value={
-                      bestFireDist !== null && bestFireDist !== Infinity
-                        ? bestFireDist.toFixed(2)
-                        : "—"
-                    }
-                    hint="мин. расстояние"
-                    color="#ff5020"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
-                  <Metric
-                    label="Старт"
-                    value={firstCost !== null ? firstCost.toFixed(1) : "—"}
-                    hint="первая итерация"
-                    small
-                  />
-                  <Metric
-                    label="Улучшение"
-                    value={improvement > 0 ? `${improvement.toFixed(1)}%` : "—"}
-                    hint="от стартовой стоимости"
-                    color="#96dc64"
-                    small
-                  />
-                  <Metric
-                    label="Успешных муравьёв"
-                    value={`${successRate.toFixed(0)}%`}
-                    hint={`из ${numAnts} в последней итерации`}
-                    small
-                  />
-                </div>
-
-                {bestCost && (
-                  <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                    <Interpretation
-                      ok={bestFireDist >= 3.5}
-                      label="Безопасный обход огня"
-                      detail={
-                        bestFireDist >= 3.5
-                          ? `${bestFireDist.toFixed(1)} >= 3.5 клетки`
-                          : `${bestFireDist?.toFixed(1)} < 3.5 — близко`
-                      }
-                    />
-                    <Interpretation
-                      ok={improvement >= 20}
-                      label="Существенное улучшение"
-                      detail={
-                        improvement >= 20
-                          ? `${improvement.toFixed(0)}% от старта`
-                          : `пока ${improvement.toFixed(0)}%, нужно >= 20%`
-                      }
-                    />
-                    <Interpretation
-                      ok={convergedAt !== null}
-                      label="Алгоритм сошёлся"
-                      detail={
-                        convergedAt !== null
-                          ? `на итерации ${convergedAt}`
-                          : "продолжаем поиск"
-                      }
-                    />
-                  </div>
-                )}
+                  );
+                })}
               </div>
-            )}
+            </div>
+
           </div>
 
           {/* Правая колонка */}
@@ -2499,358 +2569,238 @@ export default function SchoolEvacuationACO() {
               </div>
             )}
 
+            {/* === РАЗБОР ФОРМУЛЫ === */}
+            {mode === MODES.NORMAL && (
+              <div
+                className="rounded-lg p-5"
+                style={{
+                  background:
+                    "linear-gradient(135deg, rgba(255,137,6,0.06), rgba(127,219,255,0.04))",
+                  border: "1px solid rgba(255,137,6,0.2)",
+                }}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Calculator size={16} style={{ color: "#ff8906" }} />
+                    <div
+                      className="mono text-sm uppercase tracking-widest"
+                      style={{ color: "#ff8906" }}
+                    >
+                      {breakdown && breakdown.cellType !== 1 && breakdown.cellType !== 2
+                        ? `Разбор формулы для клетки (${breakdown.cell.row}, ${breakdown.cell.col})`
+                        : "Разбор формулы для клетки"}
+                    </div>
+                  </div>
+                  {pinnedCell && (
+                    <button
+                      onClick={() => setPinnedCell(null)}
+                      className="mono text-xs px-2 py-1 rounded"
+                      style={{
+                        background: "rgba(255,255,255,0.05)",
+                        color: "#a7a9be",
+                      }}
+                    >
+                      × открепить
+                    </button>
+                  )}
+                </div>
+
+                {!breakdown || breakdown.cellType === 1 || breakdown.cellType === 2 ? (
+                  <div
+                    className="mono text-xs py-8 text-center"
+                    style={{ color: "rgba(167,169,190,0.6)" }}
+                  >
+                    Наведите курсор на свободную клетку карты или кликните по
+                    ней — здесь появится таблица с вычислением вероятностей
+                    P(i→j) для каждого направления.
+                  </div>
+                ) : (
+                  <BreakdownContent breakdown={breakdown} alpha={alpha} beta={beta} />
+                )}
+              </div>
+            )}
+            {/* === МЕТРИКИ === */}
             <div
-              className="p-4 rounded-lg"
+              className="rounded-lg p-5 relative"
               style={{
                 background: "rgba(255,255,255,0.03)",
                 border: "1px solid rgba(255,255,255,0.08)",
               }}
             >
-              <div
-                className="mono text-xs uppercase tracking-widest mb-4"
-                style={{ color: "#a7a9be" }}
-              >
-                Параметры
-              </div>
-              <div className="space-y-3">
-                <ParamSlider
-                  label="α — феромон"
-                  value={alpha}
-                  setValue={setAlpha}
-                  min={0}
-                  max={3}
-                  step={0.1}
-                  upHint="сильнее следует за толпой"
-                  downHint="игнорирует опыт колонии"
-                />
-                <ParamSlider
-                  label="β — эвристика"
-                  value={beta}
-                  setValue={setBeta}
-                  min={0}
-                  max={6}
-                  step={0.1}
-                  upHint="жадно идёт к выходу"
-                  downHint="игнорирует расстояние"
-                />
-                <ParamSlider
-                  label="ρ — испарение"
-                  value={rho}
-                  setValue={setRho}
-                  min={0.01}
-                  max={0.5}
-                  step={0.01}
-                  upHint="феромон быстро забывается"
-                  downHint="старые пути долго живут"
-                />
-                <ParamSlider
-                  label="Q — отложение"
-                  value={Q}
-                  setValue={setQ}
-                  min={10}
-                  max={300}
-                  step={10}
-                  upHint="больше феромона за итерацию"
-                  downHint="слабый сигнал от муравьёв"
-                />
-                <ParamSlider
-                  label="e — элита"
-                  value={eliteWeight}
-                  setValue={setEliteWeight}
-                  min={0}
-                  max={5}
-                  step={1}
-                  upHint="лучший путь доминирует"
-                  downHint="все пути равны"
-                />
-                <ParamSlider
-                  label="муравьёв"
-                  value={numAnts}
-                  setValue={setNumAnts}
-                  min={5}
-                  max={50}
-                  step={1}
-                  upHint="точнее, медленнее"
-                  downHint="быстрее, случайнее"
-                />
-                <ParamSlider
-                  label="скорость"
-                  value={speed}
-                  setValue={setSpeed}
-                  min={0.5}
-                  max={5}
-                  step={0.5}
-                />
-              </div>
-            </div>
-
-            {/* === ФОРМУЛЫ === */}
-            <div
-              className="p-4 rounded-lg"
-              style={{
-                background: "rgba(255,200,50,0.05)",
-                border: "1px solid rgba(255,200,50,0.15)",
-              }}
-            >
-              <div
-                className="mono text-2xl uppercase tracking-widest mb-2"
-                style={{ color: "#ffc832" }}
-              >
-                Формулы алгоритма
-              </div>
-              <div
-                className="text-sm mb-3"
-                style={{ color: "rgba(167,169,190,0.85)", lineHeight: 1.7 }}
-              >
-                <b style={{ color: "#fffffe" }}>P(i{"→"}j)</b> — вероятность
-                перехода в соседнюю клетку j. Числитель — желание попасть в j,
-                знаменатель — сумма желаний по всем соседям. Большой{" "}
-                <b style={{ color: "#fffffe" }}>{"α"}</b> — муравьи доверяют
-                колонии, большой <b style={{ color: "#fffffe" }}>{"β"}</b> —
-                идут напрямую к выходу. Вторая формула: феромон испаряется на{" "}
-                {"ρ"}, затем прибавляется {"Δτ"} от удачных муравьёв.
-              </div>
-              <div
-                className="space-y-3 mono text-xs"
-                style={{ color: "#fffffe" }}
-              >
-                <div>
-                  <div style={{ color: "#a7a9be", marginBottom: 4 }}>
-                    Вероятность перехода i {"→"} j:
-                  </div>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <BarChart3 size={16} style={{ color: "#a7a9be" }} />
                   <div
-                    className="rounded p-2 text-center"
-                    style={{ background: "rgba(0,0,0,0.3)", fontSize: "16px" }}
+                    className="mono text-xs uppercase tracking-widest"
+                    style={{ color: "#a7a9be" }}
                   >
-                    P(i{"→"}j) ={" "}
-                    <span style={{ color: "#ffc832" }}>{"τ"}(i,j)</span>
-                    <sup style={{ color: "#ff8906" }}>{"α"}</sup>
-                    {" · "}
-                    <span style={{ color: "#96dc64" }}>{"η"}(i,j)</span>
-                    <sup style={{ color: "#7fdbff" }}>{"β"}</sup>
-                    {" / Σ "}
-                    <span style={{ color: "#ffc832" }}>{"τ"}</span>
-                    <sup style={{ color: "#ff8906" }}>{"α"}</sup>
-                    {"·"}
-                    <span style={{ color: "#96dc64" }}>{"η"}</span>
-                    <sup style={{ color: "#7fdbff" }}>{"β"}</sup>
-                  </div>
-                  <div
-                    className="mt-1.5 space-y-0.5"
-                    style={{ color: "rgba(167,169,190,0.7)", fontSize: "16px" }}
-                  >
-                    <div>
-                      <span style={{ color: "#ffc832" }}>{"τ"}</span>
-                      {" — феромон на ребре"}
-                    </div>
-                    <div>
-                      <span style={{ color: "#96dc64" }}>{"η"}</span>
-                      {" — близость к выходу × удалённость от огня"}
-                    </div>
-                    <div>
-                      <span style={{ color: "#ff8906" }}>{"α"}</span>
-                      {" — вес феромона · "}
-                      <span style={{ color: "#7fdbff" }}>{"β"}</span>
-                      {" — вес эвристики"}
-                    </div>
+                    Метрики
                   </div>
                 </div>
-                <div
+                <button
+                  onClick={() => setMetricsMenuOpen(!metricsMenuOpen)}
+                  className="mono text-xs px-2 py-1 rounded-md flex items-center gap-1"
                   style={{
-                    borderTop: "1px solid rgba(255,255,255,0.06)",
-                    paddingTop: 10,
+                    background: metricsMenuOpen
+                      ? "rgba(255,137,6,0.2)"
+                      : "rgba(255,255,255,0.05)",
+                    color: metricsMenuOpen ? "#ff8906" : "#a7a9be",
+                    border: "1px solid rgba(255,255,255,0.1)",
                   }}
                 >
-                  <div style={{ color: "#a7a9be", marginBottom: 4 }}>
-                    Обновление феромона:
-                  </div>
-                  <div
-                    className="rounded p-2"
-                    style={{ background: "rgba(0,0,0,0.3)", fontSize: "16px" }}
-                  >
-                    <div className="text-center mb-1">
-                      <span style={{ color: "#ffc832" }}>{"τ"}</span>
-                      <sub>new</sub>
-                      {" = (1 − "}
-                      <span style={{ color: "#ff5020" }}>{"ρ"}</span>
-                      {") · "}
-                      <span style={{ color: "#ffc832" }}>{"τ"}</span>
-                      <sub>old</sub>
-                      {" + "}
-                      <span style={{ color: "#96dc64" }}>{"Δτ"}</span>
-                    </div>
-                    <div className="text-center">
-                      <span style={{ color: "#96dc64" }}>{"Δτ"}</span>
-                      {" = "}
-                      <span style={{ color: "#ff8906" }}>Q</span>
-                      {" / L  (только успешные муравьи)"}
-                    </div>
-                  </div>
-                  <div
-                    className="mt-1.5 space-y-0.5"
-                    style={{ color: "rgba(167,169,190,0.7)", fontSize: "16px" }}
-                  >
-                    <div>
-                      <span style={{ color: "#ff5020" }}>{"ρ"}</span>
-                      {" — испарение (0..1) · "}
-                      <span style={{ color: "#ff8906" }}>Q</span>
-                      {" — константа отложения"}
-                    </div>
-                    <div>L — стоимость F маршрута</div>
-                  </div>
-                </div>
+                  <Plus size={12} /> добавить
+                </button>
               </div>
+
+              {/* Выпадающее меню */}
+              {metricsMenuOpen && (
+                <div
+                  className="absolute right-5 top-12 rounded-md p-2 z-10"
+                  style={{
+                    background: "rgba(15,15,25,0.98)",
+                    border: "1px solid rgba(255,255,255,0.15)",
+                    boxShadow: "0 10px 30px rgba(0,0,0,0.6)",
+                    minWidth: 280,
+                  }}
+                >
+                  <div
+                    className="mono text-xs mb-2 px-2 py-1"
+                    style={{ color: "#a7a9be" }}
+                  >
+                    Выберите метрики:
+                  </div>
+                  {[
+                    { id: "iterations", label: "Итераций" },
+                    { id: "length", label: "Длина лучшего маршрута" },
+                    { id: "cost", label: "Стоимость F (длина + штраф)" },
+                    { id: "fireDist", label: "Расстояние до огня" },
+                    { id: "success", label: "Успешных муравьёв (%)" },
+                    { id: "improvement", label: "Улучшение от старта (%)" },
+                    { id: "converged", label: "Сошлось на итерации" },
+                  ].map((m) => {
+                    const checked = selectedMetrics.includes(m.id);
+                    return (
+                      <label
+                        key={m.id}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer mono text-xs"
+                        style={{
+                          background: checked
+                            ? "rgba(255,137,6,0.08)"
+                            : "transparent",
+                          color: checked ? "#ff8906" : "#fffffe",
+                        }}
+                        onClick={() => {
+                          setSelectedMetrics((prev) =>
+                            checked
+                              ? prev.filter((x) => x !== m.id)
+                              : [...prev, m.id],
+                          );
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 14,
+                            height: 14,
+                            borderRadius: 3,
+                            border: `1.5px solid ${checked ? "#ff8906" : "rgba(255,255,255,0.3)"}`,
+                            background: checked ? "#ff8906" : "transparent",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          {checked && <Check size={10} color="#0a0a0f" />}
+                        </div>
+                        {m.label}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Карточки выбранных метрик */}
+              {selectedMetrics.length === 0 ? (
+                <div
+                  className="mono text-xs text-center py-6"
+                  style={{ color: "rgba(167,169,190,0.5)" }}
+                >
+                  Нажмите «+ добавить» для выбора метрик
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {selectedMetrics.includes("iterations") && (
+                    <Metric
+                      label="Итераций"
+                      value={iteration}
+                      hint="выполнено"
+                      explanation="Сколько раз вся колония муравьёв прошла маршрут. С каждой итерацией решение улучшается."
+                    />
+                  )}
+                  {selectedMetrics.includes("length") && (
+                    <Metric
+                      label="Длина маршрута"
+                      value={bestLength !== null ? `${bestLength}` : "—"}
+                      hint="клеток"
+                      color="#7fdbff"
+                      explanation="Сколько клеток занимает лучший найденный путь от класса до выхода. Меньше — короче маршрут."
+                    />
+                  )}
+                  {selectedMetrics.includes("cost") && (
+                    <Metric
+                      label="Стоимость F"
+                      value={bestCost ? bestCost.toFixed(1) : "—"}
+                      hint="длина + штраф"
+                      color="#ff8906"
+                      explanation="Главная оценка маршрута: длина пути плюс штраф за близость к огню. Именно это число минимизирует алгоритм."
+                    />
+                  )}
+                  {selectedMetrics.includes("fireDist") && (
+                    <Metric
+                      label="До огня"
+                      value={
+                        bestFireDist !== null && bestFireDist !== Infinity
+                          ? bestFireDist.toFixed(2)
+                          : "—"
+                      }
+                      hint="мин. расстояние"
+                      color="#ff5020"
+                      explanation="Насколько близко лучший путь подходит к ближайшему очагу пожара. Больше — безопаснее маршрут."
+                    />
+                  )}
+                  {selectedMetrics.includes("success") && (
+                    <Metric
+                      label="Успешных муравьёв"
+                      value={`${successRate.toFixed(0)}%`}
+                      hint={`из ${numAnts} в итерации`}
+                      color="#96dc64"
+                      explanation="Сколько муравьёв дошли до выхода в последней итерации. Остальные застряли в тупиках или вышли за лимит шагов."
+                    />
+                  )}
+                  {selectedMetrics.includes("improvement") && (
+                    <Metric
+                      label="Улучшение"
+                      value={
+                        improvement > 0 ? `${improvement.toFixed(1)}%` : "—"
+                      }
+                      hint="от стартовой стоимости"
+                      color="#96dc64"
+                      explanation="На сколько процентов лучший путь стал короче по сравнению с первой итерацией. Показывает прогресс обучения колонии."
+                    />
+                  )}
+                  {selectedMetrics.includes("converged") && (
+                    <Metric
+                      label="Сошлось"
+                      value={
+                        convergedAt !== null ? `на ${convergedAt}` : "—"
+                      }
+                      hint="итерации"
+                      color="#7fdbff"
+                      explanation="На какой итерации алгоритм перестал находить улучшения. После этого можно остановить поиск — лучшего пути уже не будет."
+                    />
+                  )}
+                </div>
+              )}
             </div>
-
-            {/* === ЖИВЫЕ ЗНАЧЕНИЯ ИТЕРАЦИИ === */}
-            {iterStats && (
-              <div
-                className="p-4 rounded-lg"
-                style={{
-                  background: "rgba(127,219,255,0.05)",
-                  border: "1px solid rgba(127,219,255,0.2)",
-                }}
-              >
-                <div
-                  className="mono text-sm uppercase tracking-widest mb-2 flex items-center gap-2"
-                  style={{ color: "#7fdbff" }}
-                >
-                  <Zap size={12} /> Последняя итерация {"·"} лучший муравей
-                </div>
-                <div
-                  className="text-sm mb-3"
-                  style={{ color: "rgba(167,169,190,0.85)", lineHeight: 1.7 }}
-                >
-                  Реальные числа из последней итерации подставлены в формулы
-                  выше. Лучший муравей — чей маршрут оказался самым дешёвым.{" "}
-                  <b style={{ color: "#fffffe" }}>{"τ̄"}</b> и{" "}
-                  <b style={{ color: "#fffffe" }}>{"η̄"}</b> — средние по рёбрам
-                  его пути. <b style={{ color: "#fffffe" }}>{"Δτ = Q/L"}</b> —
-                  сколько феромона он отложит: короче путь — больше {"Δτ"}.{" "}
-                  <b style={{ color: "#ffc832" }}>{"τ̄_new"}</b> растёт от
-                  итерации к итерации когда алгоритм улучшается.
-                </div>
-                <div className="space-y-2 mono text-sm">
-                  <div
-                    className="rounded p-2"
-                    style={{ background: "rgba(0,0,0,0.25)" }}
-                  >
-                    <div
-                      style={{
-                        color: "#a7a9be",
-                        fontSize: "14px",
-                        marginBottom: 6,
-                      }}
-                    >
-                      Вероятность перехода P(i{"→"}j):
-                    </div>
-                    <div
-                      className="flex flex-wrap gap-x-3 gap-y-1"
-                      style={{ fontSize: "14px" }}
-                    >
-                      <span>
-                        <span style={{ color: "#ffc832" }}>{"τ̄"}</span>
-                        {" = "}
-                        <b style={{ color: "#fffffe" }}>
-                          {iterStats.tauAvg.toFixed(3)}
-                        </b>
-                      </span>
-                      <span>
-                        <span style={{ color: "#96dc64" }}>{"η̄"}</span>
-                        {" = "}
-                        <b style={{ color: "#fffffe" }}>
-                          {iterStats.etaAvg.toFixed(4)}
-                        </b>
-                      </span>
-                      <span>
-                        <span style={{ color: "#ff8906" }}>{"α"}</span>
-                        {" = "}
-                        {iterStats.alpha.toFixed(1)}
-                      </span>
-                      <span>
-                        <span style={{ color: "#7fdbff" }}>{"β"}</span>
-                        {" = "}
-                        {iterStats.beta.toFixed(1)}
-                      </span>
-                    </div>
-                    <div
-                      className="mt-2"
-                      style={{ fontSize: "14px", color: "#a7a9be" }}
-                    >
-                      {"τᵜᵃ·ηᵜᵇ"}
-                      {" = "}
-                      <b style={{ color: "#fffffe" }}>
-                        {iterStats.fAvg.toFixed(6)}
-                      </b>
-                      <span style={{ fontSize: "14px", marginLeft: 6 }}>
-                        (числитель P)
-                      </span>
-                    </div>
-                  </div>
-                  <div
-                    className="rounded p-2"
-                    style={{ background: "rgba(0,0,0,0.25)" }}
-                  >
-                    <div
-                      style={{
-                        color: "#a7a9be",
-                        fontSize: "14px",
-                        marginBottom: 6,
-                      }}
-                    >
-                      Обновление феромона:
-                    </div>
-                    <div
-                      className="flex flex-wrap gap-x-3 gap-y-1"
-                      style={{ fontSize: "11px" }}
-                    >
-                      <span>
-                        L ={" "}
-                        <b style={{ color: "#fffffe" }}>
-                          {iterStats.cost.toFixed(1)}
-                        </b>
-                      </span>
-                      <span>
-                        <span style={{ color: "#ff8906" }}>Q</span>
-                        {" = "}
-                        {iterStats.Q}
-                      </span>
-                      <span>
-                        <span style={{ color: "#ff5020" }}>{"ρ"}</span>
-                        {" = "}
-                        {iterStats.rho.toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="mt-1.5" style={{ fontSize: "14px" }}>
-                      <span style={{ color: "#96dc64" }}>{"Δτ"}</span>
-                      {" = Q/L = "}
-                      <b style={{ color: "#fffffe" }}>
-                        {iterStats.deltaT.toFixed(4)}
-                      </b>
-                    </div>
-                    <div className="mt-1.5" style={{ fontSize: "14px" }}>
-                      {"τ̄_new = (1−"}
-                      {iterStats.rho.toFixed(2)}
-                      {")·"}
-                      {iterStats.tauAvg.toFixed(3)}
-                      {" + "}
-                      {iterStats.deltaT.toFixed(4)}
-                      {" = "}
-                      <b style={{ color: "#ffc832" }}>
-                        {iterStats.tauNew.toFixed(4)}
-                      </b>
-                    </div>
-                  </div>
-                  <div
-                    style={{ color: "rgba(167,169,190,0.6)", fontSize: "10px" }}
-                  >
-                    {"τ̄"} и {"η̄"} — средние по {iterStats.pathLen} рёбрам
-                    лучшего пути
-                  </div>
-                </div>
-              </div>
-            )}
-
             {/* === ВЫВОД РАСЧЁТОВ (описание) добавлено в основной блок === */}
 
             <div
@@ -2884,6 +2834,131 @@ export default function SchoolEvacuationACO() {
   );
 }
 
+function BreakdownContent({ breakdown, alpha, beta }) {
+  return (
+    <>
+      <div
+        className="text-xs mb-3"
+        style={{ color: "rgba(167,169,190,0.85)", lineHeight: 1.7 }}
+      >
+        Здесь показано, как муравей выбирал бы следующий шаг, стоя в этой
+        клетке. <b style={{ color: "#ffc832" }}>τ</b> — феромон на ребре,{" "}
+        <b style={{ color: "#96dc64" }}>η</b> — эвристика,{" "}
+        <b style={{ color: "#ff8906" }}>P</b> — итоговая вероятность. Строка
+        с наибольшим P выделена.
+      </div>
+      <div
+        className="rounded-md p-3 mb-3 mono text-xs text-center"
+        style={{
+          background: "rgba(0,0,0,0.3)",
+          border: "1px solid rgba(255,255,255,0.05)",
+          color: "#fffffe",
+        }}
+      >
+        P(j) = τ(j)<sup>α</sup> · η(j)<sup>β</sup> / Σ&nbsp;&nbsp;&nbsp;|
+        &nbsp;&nbsp;&nbsp;
+        <span style={{ color: "#ffc832" }}>α={alpha.toFixed(1)}</span> ·
+        <span style={{ color: "#96dc64" }}> β={beta.toFixed(1)}</span>
+      </div>
+      {breakdown.candidates.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table
+            className="w-full mono text-xs"
+            style={{ borderCollapse: "collapse" }}
+          >
+            <thead>
+              <tr
+                style={{
+                  color: "#a7a9be",
+                  borderBottom: "1px solid rgba(255,255,255,0.1)",
+                }}
+              >
+                <th className="text-left py-2 px-2">направление</th>
+                <th className="text-right py-2 px-2">τ</th>
+                <th className="text-right py-2 px-2">η</th>
+                <th className="text-right py-2 px-2">
+                  τ<sup>α</sup>·η<sup>β</sup>
+                </th>
+                <th
+                  className="text-right py-2 px-2"
+                  style={{ color: "#ff8906" }}
+                >
+                  P
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {breakdown.candidates
+                .slice()
+                .sort((a, b) => b.prob - a.prob)
+                .map((c, i) => (
+                  <tr
+                    key={i}
+                    style={{
+                      color: "#fffffe",
+                      borderBottom: "1px solid rgba(255,255,255,0.05)",
+                      background:
+                        i === 0 ? "rgba(255,137,6,0.05)" : "transparent",
+                    }}
+                  >
+                    <td className="py-2 px-2">{c.direction}</td>
+                    <td
+                      className="text-right py-2 px-2"
+                      style={{ color: "#ffc832" }}
+                    >
+                      {c.tau.toFixed(3)}
+                    </td>
+                    <td
+                      className="text-right py-2 px-2"
+                      style={{ color: "#96dc64" }}
+                    >
+                      {c.eta.toFixed(3)}
+                    </td>
+                    <td
+                      className="text-right py-2 px-2"
+                      style={{ color: "#a7a9be" }}
+                    >
+                      {c.f.toFixed(5)}
+                    </td>
+                    <td
+                      className="text-right py-2 px-2"
+                      style={{
+                        color: "#ff8906",
+                        fontWeight: 600,
+                        fontSize: i === 0 ? "14px" : "12px",
+                      }}
+                    >
+                      {(c.prob * 100).toFixed(1)}%
+                    </td>
+                  </tr>
+                ))}
+              <tr style={{ color: "#a7a9be", fontSize: "11px" }}>
+                <td
+                  className="py-2 px-2"
+                  colSpan="3"
+                  style={{ textAlign: "right" }}
+                >
+                  сумма Σ:
+                </td>
+                <td className="text-right py-2 px-2">
+                  {breakdown.candidates
+                    .reduce((s, c) => s + c.f, 0)
+                    .toFixed(5)}
+                </td>
+                <td className="text-right py-2 px-2">100%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="mono text-xs" style={{ color: "#dc6464" }}>
+          Клетка изолирована — все соседи заблокированы (стена/огонь).
+        </div>
+      )}
+    </>
+  );
+}
+
 function ToolButton({ tool, active, setActive, icon, label, color }) {
   const isActive = active === tool;
   return (
@@ -2902,7 +2977,7 @@ function ToolButton({ tool, active, setActive, icon, label, color }) {
   );
 }
 
-function Metric({ label, value, hint, color, small }) {
+function Metric({ label, value, hint, color, small, explanation }) {
   return (
     <div>
       <div className="mono text-xs mb-1" style={{ color: "#a7a9be" }}>
@@ -2924,6 +2999,19 @@ function Metric({ label, value, hint, color, small }) {
           style={{ color: "rgba(167,169,190,0.6)" }}
         >
           {hint}
+        </div>
+      )}
+      {explanation && (
+        <div
+          className="text-xs mt-2"
+          style={{
+            color: "rgba(167,169,190,0.85)",
+            lineHeight: 1.5,
+            paddingTop: 6,
+            borderTop: "1px solid rgba(255,255,255,0.06)",
+          }}
+        >
+          {explanation}
         </div>
       )}
     </div>
